@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Pokédex Birthday Match</title>
+<style>
+  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background: #F6F4EE; color: #1B1F2A; }
+  .page { max-width: 960px; margin: 0 auto; padding: 56px 24px; display: flex; flex-direction: column; gap: 32px; }
+  h1 { margin: 0; font-size: 44px; line-height: 1.1; }
+  .search { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; }
+  .field { display: flex; flex-direction: column; gap: 6px; }
+  .field label { font-size: 14px; font-weight: 600; }
+  input { height: 48px; padding: 0 14px; font-size: 16px; border: 2px solid #1B1F2A; border-radius: 8px; background: #FFFFFF; }
+  button { height: 48px; padding: 0 28px; font-size: 16px; font-weight: 700; color: #FFFFFF; background: #C62B22; border: 2px solid #1B1F2A; border-radius: 8px; cursor: pointer; }
+  button:disabled { opacity: 0.6; cursor: wait; }
+  .small { margin: 0; font-size: 14px; color: #4A4F5C; }
+  #results { display: flex; flex-direction: column; gap: 16px; }
+  .pair { background: #FFFFFF; border: 2px solid #1B1F2A; border-radius: 12px; padding: 20px 24px; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 20px; }
+  .mon { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  .mon img { width: 110px; height: 110px; border-radius: 12px; background: #E2DED2; }
+  .mon span { color: #4A4F5C; }
+  .plus { font-size: 32px; font-weight: 700; }
+  .boxes { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 24px; }
+  .box { background: #FFFFFF; border: 2px solid; border-radius: 12px; padding: 24px; display: flex; flex-direction: column; gap: 8px; }
+  .box.red { border-color: #C62B22; }
+  .box.blue { border-color: #1F4FBF; }
+  .tag { font-size: 14px; font-weight: 700; }
+  .red .tag { color: #C62B22; }
+  .blue .tag { color: #1F4FBF; }
+  .box h2 { margin: 0; font-size: 24px; }
+  .time { font-size: 40px; font-weight: 700; }
+  .note { color: #4A4F5C; }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>Pokédex Birthday Match</h1>
+
+  <div class="search">
+    <div class="field">
+      <label for="bday">Your birthday</label>
+      <input id="bday" type="date" value="2004-10-20">
+    </div>
+    <button id="go" onclick="findMatches()" disabled>Loading Pokémon...</button>
+  </div>
+  <p class="small" id="status"></p>
+
+  <div id="results"></div>
+  <p class="small" id="summary"></p>
+
+  <div class="boxes">
+    <div class="box red">
+      <div class="tag">BASELINE</div>
+      <h2>Precomputed lookup index</h2>
+      <div class="time" id="indexMs">-</div>
+      <div class="note" id="indexNote">1 table lookup · built at startup</div>
+    </div>
+    <div class="box blue">
+      <div class="tag">COMPARISON</div>
+      <h2>Dynamic query-time search</h2>
+      <div class="time" id="dynamicMs">-</div>
+      <div class="note" id="dynamicNote">computed per request</div>
+    </div>
+  </div>
+</div>
+
+<script>
+const SPRITES = "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/";
+const LIST_URL = "https://pokeapi.co/api/v2/pokemon-species?limit=2000";
+
+const names = {};               // Pokédex number -> name
+const dexList = [];             // every Pokédex number
+const indexTable = new Map();   // birthday number (like 1020) -> list of pairs
+let buildMs = 0;
+
+function prettyName(raw) {
+  return raw.split("-").map(w => w[0].toUpperCase() + w.slice(1)).join(" ");
+}
+
+// The list is downloaded once, then saved in the browser so later visits don't call the API.
+async function loadPokemon() {
+  let list = null;
+  try { list = JSON.parse(localStorage.getItem("pokemonList")); } catch (e) {}
+  if (!list) {
+    const res = await fetch(LIST_URL);
+    const data = await res.json();
+    list = data.results.map(p => ({
+      dex: Number(p.url.split("/").filter(Boolean).pop()),
+      name: prettyName(p.name)
+    }));
+    try { localStorage.setItem("pokemonList", JSON.stringify(list)); } catch (e) {}
+  }
+  list.forEach(p => { names[p.dex] = p.name; dexList.push(p.dex); });
+}
+
+// Method 1: precomputed. Done once at startup.
+function buildIndex() {
+  const start = performance.now();
+  for (let i = 0; i < dexList.length; i++) {
+    for (let j = i + 1; j < dexList.length; j++) {
+      const sum = dexList[i] + dexList[j];
+      if (sum <= 1231) {
+        if (!indexTable.has(sum)) indexTable.set(sum, []);
+        indexTable.get(sum).push([dexList[i], dexList[j]]);
+      }
+    }
+  }
+  buildMs = performance.now() - start;
+}
+
+function indexSearch(target) {
+  return indexTable.get(target) || [];
+}
+
+// Method 2: dynamic. Done again on every request.
+function dynamicSearch(target) {
+  const result = [];
+  for (let i = 0; i < dexList.length; i++)
+    for (let j = i + 1; j < dexList.length; j++)
+      if (dexList[i] + dexList[j] === target) result.push([dexList[i], dexList[j]]);
+  return result;
+}
+
+// The browser clock is too coarse for one fast lookup, so each method is repeated and averaged.
+function averageMs(search, target, runs) {
+  const start = performance.now();
+  for (let r = 0; r < runs; r++) search(target);
+  return (performance.now() - start) / runs;
+}
+
+function card(dex) {
+  return `<div class="mon"><img src="${SPRITES}${dex}.png" alt="${names[dex]}"><b>${names[dex]}</b><span>#${dex}</span></div>`;
+}
+
+function findMatches() {
+  const [, month, day] = document.getElementById("bday").value.split("-");
+  if (!month) return;
+  const target = Number(month) * 100 + Number(day);   // 10/20 -> 1020
+
+  const pairs = dynamicSearch(target);
+  const shown = pairs.slice(0, 5);
+  const indexMs = averageMs(indexSearch, target, 1000);
+  const dynamicMs = averageMs(dynamicSearch, target, 5);
+
+  document.getElementById("results").innerHTML = shown.map(([a, b]) =>
+    `<div class="pair">${card(a)}<span class="plus">+</span>${card(b)}</div>`
+  ).join("");
+  document.getElementById("summary").textContent = `${pairs.length} matches found, showing ${shown.length}`;
+  document.getElementById("indexMs").textContent = indexMs.toFixed(4) + " ms";
+  document.getElementById("dynamicMs").textContent = dynamicMs.toFixed(4) + " ms";
+  document.getElementById("indexNote").textContent = `1 table lookup · average of 1000 runs · index built in ${buildMs.toFixed(1)} ms`;
+  document.getElementById("dynamicNote").textContent = "computed per request · average of 5 runs";
+}
+
+loadPokemon().then(() => {
+  buildIndex();
+  document.getElementById("go").disabled = false;
+  document.getElementById("go").textContent = "Find matches";
+  document.getElementById("status").textContent = `${dexList.length} Pokémon loaded`;
+}).catch(() => {
+  document.getElementById("go").textContent = "Unavailable";
+  document.getElementById("status").textContent = "Couldn't load the Pokémon list. Check your internet connection and refresh the page.";
+});
+</script>
+</body>
+</html>
