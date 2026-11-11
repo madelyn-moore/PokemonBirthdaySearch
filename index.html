@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Pokédex Birthday Match</title>
+<style>
+  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background: #F6F4EE; color: #1B1F2A; }
+  .page { max-width: 960px; margin: 0 auto; padding: 56px 24px; display: flex; flex-direction: column; gap: 32px; }
+  h1 { margin: 0; font-size: 44px; line-height: 1.1; }
+  .search { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; }
+  .field { display: flex; flex-direction: column; gap: 6px; }
+  .field label { font-size: 14px; font-weight: 600; }
+  input { height: 48px; padding: 0 14px; font-size: 16px; border: 2px solid #1B1F2A; border-radius: 8px; background: #FFFFFF; }
+  button { height: 48px; padding: 0 28px; font-size: 16px; font-weight: 700; color: #FFFFFF; background: #C62B22; border: 2px solid #1B1F2A; border-radius: 8px; cursor: pointer; }
+  button:disabled { opacity: 0.6; cursor: wait; }
+  .small { margin: 0; font-size: 14px; color: #4A4F5C; }
+  #results { display: flex; flex-direction: column; gap: 16px; }
+  .pair { background: #FFFFFF; border: 2px solid #1B1F2A; border-radius: 12px; padding: 20px 24px; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 20px; }
+  .mon { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  .mon img { width: 110px; height: 110px; border-radius: 12px; background: #E2DED2; }
+  .mon span { color: #4A4F5C; }
+  .plus { font-size: 32px; font-weight: 700; }
+  .boxes { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 24px; }
+  .box { background: #FFFFFF; border: 2px solid; border-radius: 12px; padding: 24px; display: flex; flex-direction: column; gap: 8px; }
+  .box.red { border-color: #C62B22; }
+  .box.blue { border-color: #1F4FBF; }
+  .tag { font-size: 14px; font-weight: 700; }
+  .red .tag { color: #C62B22; }
+  .blue .tag { color: #1F4FBF; }
+  .box h2 { margin: 0; font-size: 24px; }
+  .time { font-size: 40px; font-weight: 700; }
+  .note { color: #4A4F5C; }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>Pokédex Birthday Match</h1>
+
+  <div class="search">
+    <div class="field">
+      <label for="bday">Your birthday</label>
+      <input id="bday" type="date" value="2004-10-20">
+    </div>
+    <button id="go" onclick="findMatches()" disabled>Loading Pokémon...</button>
+  </div>
+  <p class="small" id="status"></p>
+
+  <div id="results"></div>
+  <p class="small" id="summary"></p>
+
+  <div class="boxes">
+    <div class="box red">
+      <div class="tag">COMPARISON</div>
+      <h2>Precomputed lookup index</h2>
+      <div class="time" id="indexMs">-</div>
+      <div class="note" id="indexNote">1 table lookup · built at startup</div>
+    </div>
+    <div class="box blue">
+      <div class="tag">BASELINE</div>
+      <h2>Dynamic query-time search</h2>
+      <div class="time" id="dynamicMs">-</div>
+      <div class="note" id="dynamicNote">computed per request</div>
+    </div>
+  </div>
+</div>
+
+<script src="data.js"></script>
+<script src="search.js"></script>
+<script>
+const SPRITES = "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/";
+const names = {};      // Pokédex number -> name
+let buildMs = 0;
+let readyText = "";
+
+function card(dex) {
+  return `<div class="mon"><img src="${SPRITES}${dex}.png" alt="${names[dex]}"><b>${names[dex]}</b><span>#${dex}</span></div>`;
+}
+
+// Picks `count` different pairs at random
+function pickRandom(pairs, count) {
+  const copy = pairs.slice();
+  for (let i = 0; i < Math.min(count, copy.length); i++) {
+    const j = i + Math.floor(Math.random() * (copy.length - i));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy.slice(0, count);
+}
+
+function findMatches() {
+  const status = document.getElementById("status");
+  const [, month, day] = document.getElementById("bday").value.split("-");
+  if (!month) { status.textContent = "Please choose a birthday first."; return; }
+  status.textContent = readyText;
+  const target = Number(month) * 100 + Number(day);   // 10/20 -> 1020
+
+  const pairs = dynamicSearch(target);
+  const shown = pickRandom(pairs, 5);
+  const indexMs = averageMs(indexSearch, target, 1000);
+  const dynamicMs = averageMs(dynamicSearch, target, 5);
+
+  document.getElementById("results").innerHTML = shown.length
+    ? shown.map(([a, b]) => `<div class="pair">${card(a)}<span class="plus">+</span>${card(b)}</div>`).join("")
+    : `<div class="pair"><b>No matches found for that date.</b></div>`;
+  document.getElementById("summary").textContent = pairs.length
+    ? `${pairs.length} matches found, showing ${shown.length} at random (click "Find matches" again for different ones)`
+    : "0 matches found";
+  document.getElementById("indexMs").textContent = indexMs.toFixed(4) + " ms";
+  document.getElementById("dynamicMs").textContent = dynamicMs.toFixed(4) + " ms";
+  document.getElementById("indexNote").textContent = `1 table lookup · average of 1000 runs · index built in ${buildMs.toFixed(1)} ms`;
+  document.getElementById("dynamicNote").textContent = "computed per request · average of 5 runs";
+}
+
+loadPokemon().then(({ list }) => {
+  list.forEach(p => { names[p.dex] = p.name; });
+  setDexList(list.map(p => p.dex));
+  buildMs = buildIndex();
+  readyText = `${list.length} Pokémon loaded`;
+  document.getElementById("go").disabled = false;
+  document.getElementById("go").textContent = "Find matches";
+  document.getElementById("status").textContent = readyText;
+}).catch(error => {
+  document.getElementById("go").textContent = "Unavailable";
+  document.getElementById("status").textContent = "Couldn't load the Pokémon list. Check your internet connection and refresh the page. (Error: " + error.message + ")";
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Benchmark - Pokédex Birthday Match</title>
+<style>
+  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background: #F6F4EE; color: #1B1F2A; }
+  .page { max-width: 960px; margin: 0 auto; padding: 40px 24px; display: flex; flex-direction: column; gap: 20px; }
+  h1 { margin: 0; font-size: 36px; }
+  h2 { margin: 16px 0 6px; font-size: 20px; }
+  .row { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; }
+  .field { display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-weight: 600; }
+  input { height: 40px; padding: 0 10px; font-size: 16px; border: 2px solid #1B1F2A; border-radius: 8px; background: #FFFFFF; }
+  button { height: 44px; padding: 0 24px; font-size: 16px; font-weight: 700; color: #FFFFFF; background: #C62B22; border: 2px solid #1B1F2A; border-radius: 8px; cursor: pointer; }
+  button:disabled { opacity: 0.6; cursor: wait; }
+  table { border-collapse: collapse; background: #FFFFFF; width: 100%; }
+  th, td { border: 1px solid #1B1F2A; padding: 6px 10px; text-align: right; font-size: 14px; }
+  th:first-child, td:first-child { text-align: left; }
+  .small { margin: 0; font-size: 14px; color: #4A4F5C; }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>Benchmark</h1>
+  <p class="small">Runs both search methods over every date in a year (366 dates, including 2/29) and records startup time,
+  latency, throughput, memory and whether the two methods agree. The page freezes for several seconds while it runs.
+  For fair comparisons use the same browser on every computer, close other tabs, and run it at least 5 times.</p>
+
+  <div class="row">
+    <label class="field">Device label<input id="label" type="text" value="my-laptop"></label>
+    <label class="field">Runs per date (index)<input id="runsIndex" type="number" value="1000" min="1"></label>
+    <label class="field">Runs per date (dynamic)<input id="runsDynamic" type="number" value="5" min="1"></label>
+    <label class="field">Responsive threshold (ms)<input id="threshold" type="number" value="1000" min="1"></label>
+    <button id="run" disabled>Loading Pokémon...</button>
+    <button id="download" hidden>Download results (JSON)</button>
+  </div>
+  <p class="small" id="status"></p>
+  <div id="output"></div>
+</div>
+
+<script src="data.js"></script>
+<script src="search.js"></script>
+<script src="benchmark.js"></script>
+<script>
+let dexNumbers = [], loadInfo = null, lastResults = null;
+const fmt = n => (n === null || n === undefined) ? "n/a" : n.toFixed(4);
+const $ = id => document.getElementById(id);
+
+function show(r) {
+  const row = (name, s) => `<tr><td>${name}</td><td>${fmt(s.mean)}</td><td>${fmt(s.median)}</td><td>${fmt(s.p95)}</td><td>${fmt(s.min)}</td><td>${fmt(s.max)}</td></tr>`;
+  const batches = r.throughput.index.map((a, i) => {
+    const b = r.throughput.dynamic[i];
+    return `<tr><td>${a.requests}</td><td>${a.totalMs.toFixed(1)}</td><td>${Math.round(a.rps)}</td><td>${a.withinThreshold ? "yes" : "no"}</td>` +
+           `<td>${b.totalMs.toFixed(1)}</td><td>${Math.round(b.rps)}</td><td>${b.withinThreshold ? "yes" : "no"}</td></tr>`;
+  }).join("");
+  const s = r.startup;
+  $("output").innerHTML = `
+    <h2>Correctness</h2>
+    <p class="small">${r.correctness.mismatches === 0 ? "PASS" : "FAIL"}: ${r.correctness.mismatches} of ${r.correctness.datesChecked} dates gave different results from the two methods.</p>
+    <h2>Startup and memory</h2>
+    <table>
+      <tr><td>Loading the Pokémon list (${s.loadedFromCache ? "from browser storage" : "downloaded"})</td><td>${fmt(s.loadMs)} ms</td></tr>
+      <tr><td>Building the index (first build)</td><td>${fmt(s.indexBuildFirstMs)} ms</td></tr>
+      <tr><td>Building the index (median of 5)</td><td>${fmt(s.indexBuildMedianMs)} ms</td></tr>
+      <tr><td>Pairs stored in the index</td><td>${s.indexPairs}</td></tr>
+      <tr><td>JS heap before / after building the index</td><td>${s.heapBeforeMB === null ? "not available in this browser (use Chrome or Edge)" : fmt(s.heapBeforeMB) + " MB / " + fmt(s.heapAfterMB) + " MB"}</td></tr>
+    </table>
+    <h2>Time per search (ms, across all ${r.correctness.datesChecked} dates)</h2>
+    <table><tr><th>Method</th><th>Mean</th><th>Median</th><th>95th percentile</th><th>Fastest</th><th>Slowest</th></tr>
+      ${row("Precomputed index", r.latencyMs.index)}${row("Dynamic search (baseline)", r.latencyMs.dynamic)}</table>
+    <h2>Throughput (requests handled back to back)</h2>
+    <table><tr><th>Requests</th><th>Index: total ms</th><th>Index: requests/s</th><th>Index: within ${r.settings.thresholdMs} ms?</th>
+      <th>Dynamic: total ms</th><th>Dynamic: requests/s</th><th>Dynamic: within ${r.settings.thresholdMs} ms?</th></tr>${batches}</table>`;
+}
+
+$("run").onclick = async () => {
+  $("run").disabled = true;
+  const config = {
+    label: $("label").value.trim() || "device",
+    runsIndex: Number($("runsIndex").value) || 1000,
+    runsDynamic: Number($("runsDynamic").value) || 5,
+    thresholdMs: Number($("threshold").value) || 1000
+  };
+  lastResults = await runBenchmark(config, dexNumbers, loadInfo, text => { $("status").textContent = text; });
+  show(lastResults);
+  $("status").textContent = "Done. Download the results and save the file in the results folder.";
+  $("download").hidden = false;
+  $("run").disabled = false;
+};
+
+$("download").onclick = () => {
+  const blob = new Blob([JSON.stringify(lastResults, null, 2)], { type: "application/json" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  const label = lastResults.label.replace(/[^a-z0-9]+/gi, "-");
+  link.download = `results-${label}-${lastResults.date.slice(0, 19).replace(/:/g, "-")}.json`;
+  link.click();
+};
+
+(async () => {
+  try {
+    const start = performance.now();
+    const { list, fromCache } = await loadPokemon();
+    loadInfo = { loadMs: performance.now() - start, loadedFromCache: fromCache };
+    dexNumbers = list.map(p => p.dex);
+    $("run").disabled = false;
+    $("run").textContent = "Run benchmark";
+    $("status").textContent = `${dexNumbers.length} Pokémon loaded`;
+  } catch (e) {
+    $("run").textContent = "Unavailable";
+    $("status").textContent = "Couldn't load the Pokémon list. Check your internet connection and refresh the page. (Error: " + e.message + ")";
+  }
+})();
+</script>
+</body>
+</html>
