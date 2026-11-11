@@ -22,7 +22,7 @@
 <body>
 <div class="page">
   <h1>Benchmark</h1>
-  <p class="small">Compares the baseline dynamic search with the precomputed lookup index on the three things in the project goal: response time (Q1), memory footprint (Q2) and code complexity (Q3, measured by a script). It runs over every date in a year (366 dates, including 2/29). The page freezes for several seconds while it runs. For fair comparisons use the same browser on every computer, close other tabs, and run it at least 5 times.</p>
+  <p class="small">Compares the baseline dynamic search with the precomputed lookup index on response time (Q1) and memory footprint (Q2). It runs over every date in a year (366 dates, including 2/29). The page freezes for several seconds while it runs. For fair comparisons use the same browser on every computer, close other tabs, and run it at least 5 times.</p>
 
   <div class="row">
     <label class="field">Device label<input id="label" type="text" value="my-laptop"></label>
@@ -30,7 +30,6 @@
     <label class="field">Runs per date (dynamic)<input id="runsDynamic" type="number" value="5" min="1"></label>
     <label class="field">Responsive threshold (ms)<input id="threshold" type="number" value="1000" min="1"></label>
     <button id="run" disabled>Loading Pokémon...</button>
-    <button id="download" hidden>Download results (JSON)</button>
   </div>
   <p class="small" id="status"></p>
   <div id="output"></div>
@@ -40,7 +39,7 @@
 <script src="search.js"></script>
 <script src="benchmark.js"></script>
 <script>
-let dexNumbers = [], loadInfo = null, lastResults = null;
+let dexNumbers = [], loadInfo = null;
 const fmt = n => (n === null || n === undefined) ? "n/a" : n.toFixed(4);
 const $ = id => document.getElementById(id);
 
@@ -62,8 +61,6 @@ function show(r) {
       <tr><td>Extra memory used by the index</td><td>-</td><td>${noHeap ? "n/a" : mb(s.heapAfterMB - s.heapBeforeMB)}</td></tr>
       <tr><td>Pairs stored in memory</td><td>0</td><td>${s.indexPairs}</td></tr></table>
     <p class="small">${noHeap ? "Heap sizes are not available in this browser (use Chrome or Edge). " : "Heap sizes are rough: Chrome rounds them and garbage collection makes them jump, so compare several runs. "}</p>
-    <h2>Q3 Code size and complexity</h2>
-    <p class="small">Not measured in the browser. Run <b>node tools/code-metrics.js</b> in the project folder (see the README).</p>
     <p class="small">Sanity check: ${r.correctness.mismatches === 0 ? "PASS" : "FAIL"}, ${r.correctness.mismatches} of ${r.correctness.datesChecked} dates gave different results from the two methods.</p>`;
 }
 
@@ -75,20 +72,10 @@ $("run").onclick = async () => {
     runsDynamic: Number($("runsDynamic").value) || 5,
     thresholdMs: Number($("threshold").value) || 1000
   };
-  lastResults = await runBenchmark(config, dexNumbers, loadInfo, text => { $("status").textContent = text; });
-  show(lastResults);
-  $("status").textContent = "Done. Download the results and save the file in the results folder.";
-  $("download").hidden = false;
+  const results = await runBenchmark(config, dexNumbers, loadInfo, text => { $("status").textContent = text; });
+  show(results);
+  $("status").textContent = "Done. Copy the numbers or take a screenshot for your report, and note the device and browser.";
   $("run").disabled = false;
-};
-
-$("download").onclick = () => {
-  const blob = new Blob([JSON.stringify(lastResults, null, 2)], { type: "application/json" });
-  const link = document.createElement("a");
-  link.href = URL.createObjectURL(blob);
-  const label = lastResults.label.replace(/[^a-z0-9]+/gi, "-");
-  link.download = `results-${label}-${lastResults.date.slice(0, 19).replace(/:/g, "-")}.json`;
-  link.click();
 };
 
 (async () => {
