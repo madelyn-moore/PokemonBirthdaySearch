@@ -22,9 +22,7 @@
 <body>
 <div class="page">
   <h1>Benchmark</h1>
-  <p class="small">Runs both search methods over every date in a year (366 dates, including 2/29) and records startup time,
-  latency, throughput, memory and whether the two methods agree. The page freezes for several seconds while it runs.
-  For fair comparisons use the same browser on every computer, close other tabs, and run it at least 5 times.</p>
+  <p class="small">Compares the baseline dynamic search with the precomputed lookup index on the three things in the project goal: response time (Q1), memory footprint (Q2) and code complexity (Q3, measured by a script). It runs over every date in a year (366 dates, including 2/29). The page freezes for several seconds while it runs. For fair comparisons use the same browser on every computer, close other tabs, and run it at least 5 times.</p>
 
   <div class="row">
     <label class="field">Device label<input id="label" type="text" value="my-laptop"></label>
@@ -47,30 +45,26 @@ const fmt = n => (n === null || n === undefined) ? "n/a" : n.toFixed(4);
 const $ = id => document.getElementById(id);
 
 function show(r) {
-  const row = (name, s) => `<tr><td>${name}</td><td>${fmt(s.mean)}</td><td>${fmt(s.median)}</td><td>${fmt(s.p95)}</td><td>${fmt(s.min)}</td><td>${fmt(s.max)}</td></tr>`;
-  const batches = r.throughput.index.map((a, i) => {
-    const b = r.throughput.dynamic[i];
-    return `<tr><td>${a.requests}</td><td>${a.totalMs.toFixed(1)}</td><td>${Math.round(a.rps)}</td><td>${a.withinThreshold ? "yes" : "no"}</td>` +
-           `<td>${b.totalMs.toFixed(1)}</td><td>${Math.round(b.rps)}</td><td>${b.withinThreshold ? "yes" : "no"}</td></tr>`;
-  }).join("");
-  const s = r.startup;
+  const s = r.startup, d = r.latencyMs.dynamic, i = r.latencyMs.index;
+  const noHeap = s.heapBeforeMB === null;
+  const mb = v => (v === null) ? "n/a" : v.toFixed(2) + " MB";
+  const batches = r.throughput.dynamic.map((b, k) =>
+    `<tr><td>Requests per second (${b.requests} requests in a row)</td><td>${Math.round(b.rps)}</td><td>${Math.round(r.throughput.index[k].rps)}</td></tr>`).join("");
+  const head = title => `<h2>${title}</h2><table><tr><th>Metric</th><th>Baseline: dynamic search</th><th>Precomputed lookup index</th></tr>`;
   $("output").innerHTML = `
-    <h2>Correctness</h2>
-    <p class="small">${r.correctness.mismatches === 0 ? "PASS" : "FAIL"}: ${r.correctness.mismatches} of ${r.correctness.datesChecked} dates gave different results from the two methods.</p>
-    <h2>Startup and memory</h2>
-    <table>
-      <tr><td>Loading the Pokémon list (${s.loadedFromCache ? "from browser storage" : "downloaded"})</td><td>${fmt(s.loadMs)} ms</td></tr>
-      <tr><td>Building the index (first build)</td><td>${fmt(s.indexBuildFirstMs)} ms</td></tr>
-      <tr><td>Building the index (median of 5)</td><td>${fmt(s.indexBuildMedianMs)} ms</td></tr>
-      <tr><td>Pairs stored in the index</td><td>${s.indexPairs}</td></tr>
-      <tr><td>JS heap before / after building the index</td><td>${s.heapBeforeMB === null ? "not available in this browser (use Chrome or Edge)" : fmt(s.heapBeforeMB) + " MB / " + fmt(s.heapAfterMB) + " MB"}</td></tr>
-    </table>
-    <h2>Time per search (ms, across all ${r.correctness.datesChecked} dates)</h2>
-    <table><tr><th>Method</th><th>Mean</th><th>Median</th><th>95th percentile</th><th>Fastest</th><th>Slowest</th></tr>
-      ${row("Precomputed index", r.latencyMs.index)}${row("Dynamic search (baseline)", r.latencyMs.dynamic)}</table>
-    <h2>Throughput (requests handled back to back)</h2>
-    <table><tr><th>Requests</th><th>Index: total ms</th><th>Index: requests/s</th><th>Index: within ${r.settings.thresholdMs} ms?</th>
-      <th>Dynamic: total ms</th><th>Dynamic: requests/s</th><th>Dynamic: within ${r.settings.thresholdMs} ms?</th></tr>${batches}</table>`;
+    ${head("Q1 Speed: how fast does each method respond?")}
+      <tr><td>Average response time (mean over ${r.correctness.datesChecked} dates)</td><td>${fmt(d.mean)} ms</td><td>${fmt(i.mean)} ms</td></tr>
+      <tr><td>Median response time</td><td>${fmt(d.median)} ms</td><td>${fmt(i.median)} ms</td></tr>
+      ${batches}</table>
+    ${head("Q2 Memory: what does the index cost?")}
+      <tr><td>Startup time to build the index</td><td>0 ms (nothing to build)</td><td>${fmt(s.indexBuildFirstMs)} ms</td></tr>
+      <tr><td>JS heap size</td><td>${mb(s.heapBeforeMB)}</td><td>${mb(s.heapAfterMB)}</td></tr>
+      <tr><td>Extra memory used by the index</td><td>-</td><td>${noHeap ? "n/a" : mb(s.heapAfterMB - s.heapBeforeMB)}</td></tr>
+      <tr><td>Pairs stored in memory</td><td>0</td><td>${s.indexPairs}</td></tr></table>
+    <p class="small">${noHeap ? "Heap sizes are not available in this browser (use Chrome or Edge). " : "Heap sizes are rough: Chrome rounds them and garbage collection makes them jump, so compare several runs. "}</p>
+    <h2>Q3 Code size and complexity</h2>
+    <p class="small">Not measured in the browser. Run <b>node tools/code-metrics.js</b> in the project folder (see the README).</p>
+    <p class="small">Sanity check: ${r.correctness.mismatches === 0 ? "PASS" : "FAIL"}, ${r.correctness.mismatches} of ${r.correctness.datesChecked} dates gave different results from the two methods.</p>`;
 }
 
 $("run").onclick = async () => {
