@@ -50,13 +50,13 @@
 
   <div class="boxes">
     <div class="box red">
-      <div class="tag">BASELINE</div>
+      <div class="tag">COMPARISON</div>
       <h2>Precomputed lookup index</h2>
       <div class="time" id="indexMs">-</div>
       <div class="note" id="indexNote">1 table lookup · built at startup</div>
     </div>
     <div class="box blue">
-      <div class="tag">COMPARISON</div>
+      <div class="tag">BASELINE</div>
       <h2>Dynamic query-time search</h2>
       <div class="time" id="dynamicMs">-</div>
       <div class="note" id="dynamicNote">computed per request</div>
@@ -64,102 +64,63 @@
   </div>
 </div>
 
+<script src="data.js"></script>
+<script src="search.js"></script>
 <script>
 const SPRITES = "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/";
-const LIST_URL = "https://pokeapi.co/api/v2/pokemon-species?limit=2000";
-
-const names = {};               // Pokédex number -> name
-const dexList = [];             // every Pokédex number
-const indexTable = new Map();   // birthday number (like 1020) -> list of pairs
+const names = {};      // Pokédex number -> name
 let buildMs = 0;
-
-function prettyName(raw) {
-  return raw.split("-").map(w => w[0].toUpperCase() + w.slice(1)).join(" ");
-}
-
-// The list is downloaded once, then saved in the browser so later visits don't call the API.
-async function loadPokemon() {
-  let list = null;
-  try { list = JSON.parse(localStorage.getItem("pokemonList")); } catch (e) {}
-  if (!list) {
-    const res = await fetch(LIST_URL);
-    const data = await res.json();
-    list = data.results.map(p => ({
-      dex: Number(p.url.split("/").filter(Boolean).pop()),
-      name: prettyName(p.name)
-    }));
-    try { localStorage.setItem("pokemonList", JSON.stringify(list)); } catch (e) {}
-  }
-  list.forEach(p => { names[p.dex] = p.name; dexList.push(p.dex); });
-}
-
-// Method 1: precomputed. Done once at startup.
-function buildIndex() {
-  const start = performance.now();
-  for (let i = 0; i < dexList.length; i++) {
-    for (let j = i + 1; j < dexList.length; j++) {
-      const sum = dexList[i] + dexList[j];
-      if (sum <= 1231) {
-        if (!indexTable.has(sum)) indexTable.set(sum, []);
-        indexTable.get(sum).push([dexList[i], dexList[j]]);
-      }
-    }
-  }
-  buildMs = performance.now() - start;
-}
-
-function indexSearch(target) {
-  return indexTable.get(target) || [];
-}
-
-// Method 2: dynamic. Done again on every request.
-function dynamicSearch(target) {
-  const result = [];
-  for (let i = 0; i < dexList.length; i++)
-    for (let j = i + 1; j < dexList.length; j++)
-      if (dexList[i] + dexList[j] === target) result.push([dexList[i], dexList[j]]);
-  return result;
-}
-
-// The browser clock is too coarse for one fast lookup, so each method is repeated and averaged.
-function averageMs(search, target, runs) {
-  const start = performance.now();
-  for (let r = 0; r < runs; r++) search(target);
-  return (performance.now() - start) / runs;
-}
+let readyText = "";
 
 function card(dex) {
   return `<div class="mon"><img src="${SPRITES}${dex}.png" alt="${names[dex]}"><b>${names[dex]}</b><span>#${dex}</span></div>`;
 }
 
+// Picks `count` different pairs at random
+function pickRandom(pairs, count) {
+  const copy = pairs.slice();
+  for (let i = 0; i < Math.min(count, copy.length); i++) {
+    const j = i + Math.floor(Math.random() * (copy.length - i));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy.slice(0, count);
+}
+
 function findMatches() {
+  const status = document.getElementById("status");
   const [, month, day] = document.getElementById("bday").value.split("-");
-  if (!month) return;
+  if (!month) { status.textContent = "Please choose a birthday first."; return; }
+  status.textContent = readyText;
   const target = Number(month) * 100 + Number(day);   // 10/20 -> 1020
 
   const pairs = dynamicSearch(target);
-  const shown = pairs.slice(0, 5);
+  const shown = pickRandom(pairs, 5);
   const indexMs = averageMs(indexSearch, target, 1000);
   const dynamicMs = averageMs(dynamicSearch, target, 5);
 
-  document.getElementById("results").innerHTML = shown.map(([a, b]) =>
-    `<div class="pair">${card(a)}<span class="plus">+</span>${card(b)}</div>`
-  ).join("");
-  document.getElementById("summary").textContent = `${pairs.length} matches found, showing ${shown.length}`;
+  document.getElementById("results").innerHTML = shown.length
+    ? shown.map(([a, b]) => `<div class="pair">${card(a)}<span class="plus">+</span>${card(b)}</div>`).join("")
+    : `<div class="pair"><b>No matches found for that date.</b></div>`;
+  document.getElementById("summary").textContent = pairs.length
+    ? `${pairs.length} matches found, showing ${shown.length} at random (click "Find matches" again for different ones)`
+    : "0 matches found";
   document.getElementById("indexMs").textContent = indexMs.toFixed(4) + " ms";
   document.getElementById("dynamicMs").textContent = dynamicMs.toFixed(4) + " ms";
   document.getElementById("indexNote").textContent = `1 table lookup · average of 1000 runs · index built in ${buildMs.toFixed(1)} ms`;
   document.getElementById("dynamicNote").textContent = "computed per request · average of 5 runs";
 }
 
-loadPokemon().then(() => {
-  buildIndex();
+loadPokemon().then(({ list }) => {
+  list.forEach(p => { names[p.dex] = p.name; });
+  setDexList(list.map(p => p.dex));
+  buildMs = buildIndex();
+  readyText = `${list.length} Pokémon loaded`;
   document.getElementById("go").disabled = false;
   document.getElementById("go").textContent = "Find matches";
-  document.getElementById("status").textContent = `${dexList.length} Pokémon loaded`;
-}).catch(() => {
+  document.getElementById("status").textContent = readyText;
+}).catch(error => {
   document.getElementById("go").textContent = "Unavailable";
-  document.getElementById("status").textContent = "Couldn't load the Pokémon list. Check your internet connection and refresh the page.";
+  document.getElementById("status").textContent = "Couldn't load the Pokémon list. Check your internet connection and refresh the page. (Error: " + error.message + ")";
 });
 </script>
 </body>
